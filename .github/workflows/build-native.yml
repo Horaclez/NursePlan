@@ -1,0 +1,97 @@
+name: Compilar Q-PLAN (Android APK + Instalador Windows EXE)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    name: Generar APK (Android)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v5
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Configurar Gradle con caché
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Instalar dependencias y sincronizar Capacitor Android
+        run: |
+          npm install
+          npx cap add android || true
+          npx cap sync android
+
+      - name: Copiar íconos oficiales Q-PLAN a recursos Android mipmap
+        run: |
+          rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.png \
+                android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.png \
+                android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_foreground.png
+
+          for dir in android/app/src/main/res/mipmap-*; do
+            if [ -d "$dir" ] && [[ "$dir" != *"anydpi"* ]]; then
+              cp www/icon-512.png "$dir/ic_launcher.png"
+              cp www/icon-512.png "$dir/ic_launcher_round.png"
+              cp www/icon-512.png "$dir/ic_launcher_foreground.png"
+            fi
+          done
+
+      - name: Compilar APK listo para instalar (con reintentos ante 429)
+        run: |
+          cd android
+          chmod +x gradlew
+          SUCCESS=0
+          for i in 1 2 3; do
+            if ./gradlew assembleDebug --no-daemon --max-workers=2; then
+              SUCCESS=1
+              break
+            fi
+            echo "Fallo en intento $i/3, reintentando en 20s..."
+            sleep 20
+          done
+          if [ $SUCCESS -eq 0 ]; then
+            echo "Error: No se pudo compilar el APK tras 3 intentos."
+            exit 1
+          fi
+
+      - name: Subir artefacto APK Android
+        uses: actions/upload-artifact@v6
+        with:
+          name: Q-PLAN-Android-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  build-windows:
+    name: Generar Instalador EXE (Solo Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v5
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Instalar dependencias y generar Instalador NSIS de Windows
+        run: |
+          npm install
+          npm run dist:win
+
+      - name: Subir artefacto Instalador Windows EXE
+        uses: actions/upload-artifact@v6
+        with:
+          name: Q-PLAN-Windows-Installer
+          path: dist/*Setup*.exe
+          if-no-files-found: error
